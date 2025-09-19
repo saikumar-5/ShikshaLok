@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+pydub
+requests
+python-multipart
+python-dotenv 

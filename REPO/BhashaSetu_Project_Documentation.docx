@@ -1,0 +1,187 @@
+uvicorn main:app --reload
+BhashaSetu Project Documentation
+
+Table of Contents
+1. Project Overview
+2. Features
+3. Tech Stack
+4. System Requirements
+5. Setup Instructions
+   - Backend Setup
+   - Frontend Setup
+6. How to Run
+7. Usage Guide
+8. Project Structure
+9. API Endpoints
+10. Customization & Extensibility
+11. Troubleshooting
+12. Contributing
+13. License
+14. Contact
+
+---
+
+Project Overview
+BhashaSetu is a real-time multilingual speech translation platform designed to bridge language barriers. It allows users to:
+- Speak or upload audio in one language,
+- Get real-time transcription,
+- Instantly translate the text to another language,
+- Listen to the translated speech.
+
+The platform is ideal for live events, classrooms, or any scenario where instant language translation is needed.
+
+---
+
+Features
+- Live Speech-to-Text: Real-time transcription from microphone input.
+- File Upload: Transcribe and translate pre-recorded audio/video files.
+- Text Input: Translate typed text.
+- Real-Time Translation: Instant translation between supported languages.
+- Text-to-Speech: Listen to translations in the target language.
+- Modern UI: Clean, responsive React-based frontend.
+- Chunked TTS Playback: Long translations are split and played seamlessly.
+
+---
+
+Tech Stack
+- Frontend: React.js (JavaScript)
+- Backend: FastAPI (Python)
+- Audio Processing: pydub, requests, AudioSegment
+- External APIs: Sarvam.ai (for STT, Translation, TTS)
+- Other: HTML5 Audio, CSS (Poppins font), Node.js (for frontend dev server)
+
+---
+
+System Requirements
+- Node.js (v14+ recommended)
+- npm (v6+)
+- Python (3.8+)
+- pip (for Python dependencies)
+- Internet connection (for Sarvam.ai API access)
+
+---
+
+Setup Instructions
+
+Backend Setup
+1. Navigate to the backend directory:
+   cd backend
+2. Install Python dependencies:
+   pip install -r requirements.txt
+3. Set up environment variables (if needed):
+   - The Sarvam API key is hardcoded in main.py as SARVAM_API_KEY. For production, use environment variables for security.
+4. Run the FastAPI server:
+   uvicorn main:app --reload
+   - The backend will be available at http://localhost:8000/
+
+Frontend Setup
+1. Navigate to the frontend directory:
+   cd frontend
+2. Install Node.js dependencies:
+   npm install
+3. Start the React development server:
+   npm start
+   - The frontend will be available at http://localhost:3000/
+
+---
+
+How to Run
+1. Start the backend server (see above).
+2. Start the frontend server (see above).
+3. Open your browser and go to http://localhost:3000/.
+
+---
+
+Usage Guide
+1. Select Input Source:
+   - Microphone: Speak live and see real-time transcription and translation.
+   - Upload File: Upload an audio/video file for transcription and translation.
+   - Text Input: Type text to translate.
+2. Choose Input and Output Languages.
+3. For Microphone:
+   - Click "Start" to begin recording.
+   - Speak; your speech will be transcribed and translated live.
+   - Click the speaker icon to listen to the translation.
+4. For File Upload:
+   - Upload your file.
+   - The file will be transcribed and translated.
+   - Click the speaker icon to listen to the translation.
+5. For Text Input:
+   - Type your text and see the translation instantly.
+   - Click the speaker icon to listen to the translation.
+
+---
+
+Project Structure
+REPO/
+  ├── app.py
+  ├── backend/
+  │   ├── main.py
+  │   └── requirements.txt
+  ├── bilingual.py
+  ├── frontend/
+  │   ├── package.json
+  │   ├── src/
+  │   │   ├── App.js
+  │   │   └── ... (components, styles)
+  │   └── public/
+  ├── Metrices.py
+  ├── Multilingual_Translator.py
+  ├── realtime_translator.py
+  ├── requirements.txt
+  └── README.md
+
+---
+
+API Endpoints
+Backend (FastAPI)
+- POST /api/speech-to-text
+  - Input: Audio file, language code
+  - Output: Transcript (JSON)
+- POST /api/translate
+  - Input: JSON with text, source/target language
+  - Output: Translated text (JSON)
+- POST /api/text-to-speech
+  - Input: JSON with text, language
+  - Output: Audio file (WAV)
+- GET /health
+  - Health check endpoint
+
+---
+
+Customization & Extensibility
+- Add more languages: Update language options in the frontend and backend.
+- Change TTS/STT provider: Replace Sarvam.ai API calls in main.py with your preferred provider.
+- UI Customization: Modify React components and CSS in frontend/src/.
+
+---
+
+Troubleshooting
+- CORS Issues: Ensure the backend allows requests from the frontend origin.
+- Audio Not Playing: Check browser console for errors; ensure TTS API returns valid audio.
+- API Key Issues: Make sure your Sarvam API key is valid and not rate-limited.
+- Long Texts Not Fully Spoken: The app now splits long texts for TTS; if issues persist, check backend/provider limits.
+
+---
+
+Contributing
+1. Fork the repository.
+2. Create a new branch for your feature or bugfix.
+3. Make your changes and commit with clear messages.
+4. Push to your fork and submit a pull request.
+
+---
+
+License
+Specify your license here (e.g., MIT, Apache 2.0, etc.).
+
+---
+
+Contact
+For questions, suggestions, or support, contact:
+- Project Maintainer: [Your Name/Email]
+- GitHub: [Your GitHub link]
+
+---
+
+Thank you for using BhashaSetu! 
