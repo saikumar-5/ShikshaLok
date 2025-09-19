@@ -19,6 +19,7 @@ const LANGUAGE_OPTIONS = [
 const INPUT_SOURCES = [
   { value: 'microphone', label: 'Microphone' },
   { value: 'file', label: 'Upload File' },
+  { value: 'document', label: 'Upload Document' },
   { value: 'text', label: 'Text Input' },
 ];
 
@@ -62,6 +63,7 @@ function InputPanel({
   outputLang, setOutputLang,
   languageOptions,
   file, handleFileChange,
+  documentFile, handleDocumentChange,
   micStatus, handleMicRecord,
   onClear,
   isRecording,
@@ -101,6 +103,28 @@ function InputPanel({
             <input type="file" accept="audio/*,video/*" onChange={handleFileChange} />
             {file && <div className="file-selected">✅ {file.name}</div>}
           </label>
+        </div>
+      )}
+
+      {inputSource === 'document' && (
+        <div className="document-upload-section">
+          <label className="upload-area">
+            <div className="upload-icon">📄</div>
+            <div className="upload-text">
+              <strong>Drop Document File</strong>
+              <span>- or -</span>
+              <span>Click to Browse</span>
+            </div>
+            <input 
+              type="file" 
+              accept=".pdf,.docx,.pptx,.xlsx,.xls,.csv,.txt,.png,.jpg,.jpeg,.gif,.bmp,.tiff" 
+              onChange={handleDocumentChange} 
+            />
+            {documentFile && <div className="file-selected">✅ {documentFile.name}</div>}
+          </label>
+          <div className="supported-formats">
+            <small>Supported: PDF, DOCX, PPTX, Excel, CSV, TXT, Images (PNG, JPG, etc.)</small>
+          </div>
         </div>
       )}
 
@@ -208,6 +232,9 @@ function App() {
   const [isPlayingOriginal, setIsPlayingOriginal] = useState(false);
   const [isPlayingTranslated, setIsPlayingTranslated] = useState(false);
   const [file, setFile] = useState(null);
+  const [documentFile, setDocumentFile] = useState(null);
+  const [isProcessingDocument, setIsProcessingDocument] = useState(false);
+  const [translatedDocumentUrl, setTranslatedDocumentUrl] = useState(null);
   const [micStatus, setMicStatus] = useState('idle');
   const debounceRef = useRef(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -234,6 +261,7 @@ function App() {
   const getLeftLabel = () => {
     switch (inputSource) {
       case 'file': return 'File Input';
+      case 'document': return 'Document Input';
       case 'microphone': return 'Speech Input';
       case 'text': return 'Text Input';
       default: return 'Original Text';
@@ -243,6 +271,7 @@ function App() {
   const getRightLabel = () => {
     switch (inputSource) {
       case 'file': return 'File Translation';
+      case 'document': return 'Document Translation';
       case 'microphone': return 'Speech Translation';
       case 'text': return 'Text Translation';
       default: return 'Translated Text';
@@ -366,6 +395,7 @@ function App() {
     setTranslatedText('');
     originalTextRef.current = '';
     translatedTextRef.current = '';
+    setTranslatedDocumentUrl(null);
     
     // Disable auto-play when switching away from microphone
     if (inputSource !== 'microphone' && autoPlayEnabled) {
@@ -675,6 +705,122 @@ const speechToText = async (audioBlob, languageCode) => {
       setOriginalText(transcript);
       // For file input, do not use refs, just update state
       translateText(transcript, inputLang, outputLang);
+    }
+  };
+
+  // Handle document upload and processing
+  const handleDocumentChange = async (e) => {
+    const selectedFile = e.target.files[0];
+    setDocumentFile(selectedFile);
+    
+    if (selectedFile) {
+      setIsProcessingDocument(true);
+      setOriginalText(`Processing document: ${selectedFile.name}...`);
+      setTranslatedText('');
+      setTranslatedDocumentUrl(null);
+      
+      try {
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+        formData.append('source_language_code', inputLang);
+        formData.append('target_language_code', outputLang);
+        
+        const response = await fetch('http://localhost:8000/api/document-translate', {
+          method: 'POST',
+          body: formData,
+        });
+        
+        if (response.ok) {
+          // Get the translated document
+          const blob = await response.blob();
+          
+          // Extract filename from response headers or create one
+          const contentDisposition = response.headers.get('content-disposition');
+          let filename = 'translated_document.txt';
+          if (contentDisposition) {
+            const filenameMatch = contentDisposition.match(/filename="(.+)"/);
+            if (filenameMatch) {
+              filename = filenameMatch[1];
+            }
+          } else {
+            // Create filename based on original file and format
+            const originalExt = selectedFile.name.split('.').pop().toLowerCase();
+            const baseName = selectedFile.name.replace(/\.[^/.]+$/, "");
+            if (originalExt === 'pdf' || originalExt === 'docx') {
+              filename = `translated_${baseName}.${originalExt}`;
+            } else {
+              filename = `translated_${baseName}.txt`;
+            }
+          }
+          
+          // Create download link immediately
+          const url = URL.createObjectURL(blob);
+          const downloadLink = document.createElement('a');
+          downloadLink.href = url;
+          downloadLink.download = filename;
+          downloadLink.style.display = 'none';
+          document.body.appendChild(downloadLink);
+          downloadLink.click();
+          document.body.removeChild(downloadLink);
+          
+          // Clean up the URL after a short delay
+          setTimeout(() => {
+            URL.revokeObjectURL(url);
+          }, 1000);
+          
+          // Store document for download button and get text content
+          const docUrl = URL.createObjectURL(blob);
+          setTranslatedDocumentUrl({ url: docUrl, filename });
+          
+          // Get actual text content for display
+          try {
+            const extractFormData = new FormData();
+            extractFormData.append('file', selectedFile);
+            extractFormData.append('source_language_code', inputLang);
+            extractFormData.append('target_language_code', outputLang);
+            
+            const textResponse = await fetch('http://localhost:8000/api/document-extract', {
+              method: 'POST',
+              body: extractFormData,
+            });
+            
+            if (textResponse.ok) {
+              const textData = await textResponse.json();
+              setOriginalText(textData.extracted_text || `Document processed: ${selectedFile.name}`);
+              setTranslatedText(textData.translated_text || `Translation completed! Click download button below.`);
+            } else {
+              setOriginalText(`Document processed successfully: ${selectedFile.name}`);
+              setTranslatedText(`Translation completed! Click download button below.`);
+            }
+          } catch (error) {
+            console.error('Error getting text content:', error);
+            setOriginalText(`Document processed successfully: ${selectedFile.name}`);
+            setTranslatedText(`Translation completed! Click download button below.`);
+          }
+          
+          // Add to history
+          setHistory(prev => [
+            {
+              original: `Document: ${selectedFile.name}`,
+              translated: `Translated document: ${filename}`,
+              inputLang: inputLang,
+              outputLang: outputLang,
+              timestamp: new Date().toLocaleTimeString()
+            },
+            ...prev.slice(0, 9)
+          ]);
+        } else {
+          const errorData = await response.json();
+          setOriginalText(`Error processing document: ${errorData.error || 'Unknown error'}`);
+          setTranslatedText('');
+        }
+      } catch (error) {
+        console.error('Document processing error:', error);
+        setOriginalText(`Error processing document: ${error.message}`);
+        setTranslatedText('');
+      } finally {
+        setIsProcessingDocument(false);
+      }
     }
   };
 
@@ -1009,6 +1155,101 @@ const processAudioChunk = async (audioData) => {
   }
 };
 
+  // Function to decode HTML entities
+  const decodeHtmlEntities = (text) => {
+    const textarea = document.createElement('textarea');
+    textarea.innerHTML = text;
+    return textarea.value;
+  };
+
+  // Download translated text function
+  const downloadTranslatedText = (text, sourceLang, targetLang) => {
+    if (!text || !text.trim()) return;
+    
+    // Decode HTML entities in the text
+    const decodedText = decodeHtmlEntities(text);
+    const decodedOriginalText = decodeHtmlEntities(originalText);
+    
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+    const sourceLabel = LANGUAGE_OPTIONS.find(lang => lang.code === sourceLang)?.label || sourceLang;
+    const targetLabel = LANGUAGE_OPTIONS.find(lang => lang.code === targetLang)?.label || targetLang;
+    const filename = `translation_${sourceLabel}_to_${targetLabel}_${timestamp}.txt`;
+    
+    const content = `Translation Report
+==================
+
+Source Language: ${sourceLabel} (${sourceLang})
+Target Language: ${targetLabel} (${targetLang})
+Timestamp: ${new Date().toLocaleString()}
+
+--- Original Text ---
+${decodedOriginalText}
+
+--- Translated Text ---
+${decodedText}
+
+--- Generated by Shiksha Lok ---
+AI-Powered Multilingual Content Localization Engine`;
+    
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    
+    const downloadLink = document.createElement('a');
+    downloadLink.href = url;
+    downloadLink.download = filename;
+    downloadLink.style.display = 'none';
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+    
+    // Clean up the URL after a short delay
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+    }, 1000);
+  };
+
+  // Format document text with proper styling
+  const formatDocumentText = (text) => {
+    if (!text) return 'Document content will appear here...';
+    
+    // Decode HTML entities first
+    const decodedText = decodeHtmlEntities(text);
+    
+    // Split text into lines for better processing
+    const lines = decodedText.split('\n');
+    const formattedLines = [];
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      
+      if (!line) {
+        // Empty line - add paragraph break
+        formattedLines.push('<br>');
+        continue;
+      }
+      
+      // Check if it's a heading (marked with **)
+      if (line.startsWith('**') && line.endsWith('**')) {
+        const headingText = line.slice(2, -2);
+        formattedLines.push(`<h3 class="doc-subheading">${headingText}</h3>`);
+      }
+      // Check if it's a numbered list item
+      else if (/^\d+\.\s/.test(line)) {
+        formattedLines.push(`<div class="doc-bullet">${line}</div>`);
+      }
+      // Check if it's a bullet point
+      else if (/^[•\-]\s/.test(line)) {
+        formattedLines.push(`<div class="doc-bullet">${line}</div>`);
+      }
+      // Regular paragraph text
+      else {
+        formattedLines.push(`<p class="doc-paragraph">${line}</p>`);
+      }
+    }
+    
+    return formattedLines.join('');
+  };
+
   const handleClear = () => {
     setOriginalText('');
     setTranslatedText('');
@@ -1016,6 +1257,9 @@ const processAudioChunk = async (audioData) => {
     setCurrentChunkTranslation('');
     setIsTranslating(false);
     setFile(null);
+    setDocumentFile(null);
+    setIsProcessingDocument(false);
+    setTranslatedDocumentUrl(null);
     setMicStatus('idle');
     originalTextRef.current = '';
     translatedTextRef.current = '';
@@ -1069,19 +1313,25 @@ const processAudioChunk = async (audioData) => {
               <div><strong>Current Speech:</strong> {currentChunkText}</div>
             </div>
           )}
-          <textarea
-            className="text-area"
-            value={originalText}
-            onChange={handleOriginalTextChange}
-            placeholder={
-              inputSource === 'text' 
-                ? "Enter text to translate..." 
-                : inputSource === 'microphone'
-                ? "Recorded speech will appear here..."
-                : "File content will appear here..."
-            }
-            readOnly={inputSource !== 'text'}
-          />
+          {inputSource === 'document' ? (
+            <div className="document-preview">
+              <div className="document-content" dangerouslySetInnerHTML={{ __html: formatDocumentText(originalText) }} />
+            </div>
+          ) : (
+            <textarea
+              className="text-area"
+              value={originalText}
+              onChange={handleOriginalTextChange}
+              placeholder={
+                inputSource === 'text' 
+                  ? "Enter text to translate..." 
+                  : inputSource === 'microphone'
+                  ? "Recorded speech will appear here..."
+                  : "File content will appear here..."
+              }
+              readOnly={inputSource !== 'text'}
+            />
+          )}
         </div>
 
         {/* Center Column - Controls */}
@@ -1096,6 +1346,8 @@ const processAudioChunk = async (audioData) => {
             languageOptions={LANGUAGE_OPTIONS}
             file={file}
             handleFileChange={handleFileChange}
+            documentFile={documentFile}
+            handleDocumentChange={handleDocumentChange}
             micStatus={micStatus}
             handleMicRecord={handleMicRecord}
             onClear={handleClear}
@@ -1112,14 +1364,38 @@ const processAudioChunk = async (audioData) => {
             <div className="column-title-section">
               <span className="column-title">{getRightLabel()}</span>
             </div>
-            <button
-              className={`speaker-button ${isPlayingTranslated ? 'playing' : ''}`}
-              onClick={() => playAudio(translatedText, outputLang, setIsPlayingTranslated)}
-              disabled={!translatedText}
-              title="Play translated text"
-            >
-              🔊
-            </button>
+            <div className="header-buttons">
+              <button
+                className="download-text-btn"
+                onClick={() => {
+                  if (inputSource === 'document' && translatedDocumentUrl) {
+                    // Download the actual document
+                    const downloadLink = document.createElement('a');
+                    downloadLink.href = translatedDocumentUrl.url;
+                    downloadLink.download = translatedDocumentUrl.filename;
+                    downloadLink.style.display = 'none';
+                    document.body.appendChild(downloadLink);
+                    downloadLink.click();
+                    document.body.removeChild(downloadLink);
+                  } else {
+                    // Download as text file
+                    downloadTranslatedText(translatedText, inputLang, outputLang);
+                  }
+                }}
+                disabled={!translatedText && !(inputSource === 'document' && translatedDocumentUrl)}
+                title={inputSource === 'document' ? 'Download translated document' : 'Download translated text'}
+              >
+                📥
+              </button>
+              <button
+                className={`speaker-button ${isPlayingTranslated ? 'playing' : ''}`}
+                onClick={() => playAudio(translatedText, outputLang, setIsPlayingTranslated)}
+                disabled={!translatedText}
+                title="Play translated text"
+              >
+                🔊
+              </button>
+            </div>
           </div>
           {inputSource === 'microphone' && micStatus === 'recording' && (
             <div className="live-chunk">
@@ -1127,18 +1403,25 @@ const processAudioChunk = async (audioData) => {
             </div>
           )}
           <div className="text-area output-area">
-            {isTranslating ? (
+            {isTranslating || isProcessingDocument ? (
               <div className="translating-indicator">
                 <div className="loading-dots">
                   <span>.</span><span>.</span><span>.</span>
                 </div>
-                Translating...
+                {isProcessingDocument ? 'Processing document...' : 'Translating...'}
               </div>
             ) : (
-              <div className={`output-text ${!translatedText ? 'placeholder' : ''}`}>
-                {translatedText || 'Translation will appear here...'}
-              </div>
+              inputSource === 'document' ? (
+                <div className="document-preview">
+                  <div className="document-content" dangerouslySetInnerHTML={{ __html: formatDocumentText(translatedText) }} />
+                </div>
+              ) : (
+                <div className={`output-text ${!translatedText ? 'placeholder' : ''}`}>
+                  {translatedText ? decodeHtmlEntities(translatedText) : 'Translation will appear here...'}
+                </div>
+              )
             )}
+
           </div>
         </div>
       </div>
@@ -1447,6 +1730,143 @@ const processAudioChunk = async (audioData) => {
           to { transform: scale(1.1); }
         }
 
+        .header-buttons {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .download-text-btn {
+          width: 44px;
+          height: 44px;
+          border-radius: 50%;
+          border: 2px solid #10b981;
+          background: white;
+          color: #10b981;
+          font-size: 1.2rem;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .download-text-btn:hover:not(:disabled) {
+          background: #10b981;
+          color: white;
+          transform: scale(1.05);
+        }
+
+        .download-text-btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+          border-color: #d1d5db;
+          color: #9ca3af;
+        }
+
+        .dark-theme .download-text-btn {
+          border-color: #10b981;
+          background: #23272a;
+          color: #10b981;
+        }
+
+        .dark-theme .download-text-btn:hover:not(:disabled) {
+          background: #10b981;
+          color: white;
+        }
+
+        .document-preview {
+          flex: 1;
+          min-height: 0;
+          padding: 24px;
+          background: white;
+          overflow-y: auto;
+        }
+
+        .document-content {
+          line-height: 1.6;
+          font-family: 'Poppins', sans-serif;
+          padding: 0;
+        }
+        
+        .document-content h3:first-child {
+          margin-top: 0;
+        }
+        
+        .document-content p:last-child {
+          margin-bottom: 0;
+        }
+
+        .doc-subheading {
+          font-size: 1.2rem;
+          font-weight: 700;
+          color: #1e293b;
+          margin: 20px 0 12px 0;
+          line-height: 1.3;
+        }
+
+        .doc-paragraph {
+          margin: 8px 0;
+          color: #4b5563;
+          text-align: justify;
+          line-height: 1.6;
+          font-size: 1rem;
+        }
+
+        .doc-bullet {
+          margin: 6px 0;
+          color: #4b5563;
+          padding-left: 20px;
+          line-height: 1.5;
+        }
+
+        .document-content strong {
+          font-weight: 700;
+          color: #1e293b;
+        }
+
+        .dark-theme .document-preview {
+          background: #23272a;
+        }
+
+        .dark-theme .doc-subheading {
+          color: #f3f4f6;
+        }
+
+        .dark-theme .document-content strong {
+          color: #f3f4f6;
+        }
+
+        .dark-theme .doc-paragraph,
+        .dark-theme .doc-bullet {
+          color: #d1d5db;
+        }
+
+        /* Custom scrollbar for document preview */
+        .document-preview::-webkit-scrollbar {
+          width: 6px;
+        }
+
+        .document-preview::-webkit-scrollbar-track {
+          background: #f1f5f9;
+          border-radius: 3px;
+        }
+
+        .document-preview::-webkit-scrollbar-thumb {
+          background: #cbd5e1;
+          border-radius: 3px;
+          transition: background 0.2s ease;
+        }
+
+        .document-preview::-webkit-scrollbar-thumb:hover {
+          background: #94a3b8;
+        }
+
+        .document-preview {
+          scrollbar-width: thin;
+          scrollbar-color: #cbd5e1 #f1f5f9;
+        }
+
         .text-area {
           flex: 1;
           min-height: 0;
@@ -1612,7 +2032,7 @@ const processAudioChunk = async (audioData) => {
           accent-color: #3b82f6;
         }
 
-        .file-upload-section,         .microphone-section {
+        .file-upload-section, .document-upload-section, .microphone-section {
           margin-bottom: 20px;
           min-height: 120px;
         }
@@ -1667,6 +2087,57 @@ const processAudioChunk = async (audioData) => {
           border-radius: 6px;
           font-size: 0.9rem;
           font-weight: 500;
+        }
+
+        .supported-formats {
+          margin-top: 8px;
+          text-align: center;
+        }
+
+        .supported-formats small {
+          color: #6b7280;
+          font-size: 0.8rem;
+          font-style: italic;
+        }
+
+        .document-download-section {
+          margin-top: 16px;
+          padding: 12px;
+          background: #f0f9ff;
+          border-radius: 8px;
+          text-align: center;
+        }
+
+        .download-btn {
+          display: inline-block;
+          padding: 10px 20px;
+          background: #3b82f6;
+          color: white;
+          text-decoration: none;
+          border-radius: 8px;
+          font-weight: 600;
+          transition: all 0.2s ease;
+          border: none;
+          cursor: pointer;
+        }
+
+        .download-btn:hover {
+          background: #2563eb;
+          transform: translateY(-1px);
+          text-decoration: none;
+          color: white;
+        }
+
+        .dark-theme .document-download-section {
+          background: #1e293b;
+        }
+
+        .dark-theme .download-btn {
+          background: #60a5fa;
+        }
+
+        .dark-theme .download-btn:hover {
+          background: #3b82f6;
         }
 
         .mic-controls {
