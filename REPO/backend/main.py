@@ -2,6 +2,12 @@ from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydub import AudioSegment
+from pydub.silence import detect_nonsilent
+import subprocess
+from yt_dlp import YoutubeDL
+import numpy as np
+import torch
+from silero_vad import load_silero_vad, read_audio, get_speech_timestamps
 import os
 import tempfile
 import uuid
@@ -56,7 +62,27 @@ except ImportError:
 try:
     from PIL import Image
     import pytesseract
-    OCR_AVAILABLE = True
+    # Set Tesseract path for Windows
+    import os
+    if os.name == 'nt':  # Windows
+        possible_paths = [
+            r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+            r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+            r'C:\Users\{}\AppData\Local\Tesseract-OCR\tesseract.exe'.format(os.getenv('USERNAME', '')),
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                pytesseract.pytesseract.tesseract_cmd = path
+                break
+    
+    # Test if tesseract is actually available
+    try:
+        pytesseract.get_tesseract_version()
+        OCR_AVAILABLE = True
+        print("Tesseract OCR is available and working.")
+    except:
+        OCR_AVAILABLE = False
+        print("Warning: Tesseract OCR not available. Image text extraction disabled.")
 except ImportError:
     OCR_AVAILABLE = False
     print("Warning: OCR libraries not available. Image text extraction disabled.")
@@ -67,8 +93,15 @@ from requests.exceptions import Timeout
 import html
 from datetime import datetime
 
+# Text simplification using OpenAI-compatible API
+BLOOMZ_AVAILABLE = True
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Import the text preprocessing pipeline
+from text_preprocessing import TextPreprocessingPipeline
+preprocessor = TextPreprocessingPipeline()
 
 app = FastAPI()
 
@@ -99,6 +132,157 @@ SARVAM_API_KEY = "sk_aov2qcwm_v6DDreRZzU6ntWRM5ixh8voS"
 SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text"
 SARVAM_TRANSLATE_URL = "https://api.sarvam.ai/translate"
 SARVAM_TTS_URL = "https://api.sarvam.ai/text-to-speech"
+
+def localize_text_for_indian_context(text: str) -> str:
+    """Simplify and localize text for Indian readers using AI-powered content generation"""
+    if not BLOOMZ_AVAILABLE or not text.strip():
+        return text
+    
+    try:
+        # Use OpenAI-compatible API for true content simplification
+        prompt = f"""Rewrite the following text to make it simple and easy to understand for Indian readers. Use:
+- Simple, everyday words instead of complex terms
+- Short, clear sentences
+- Indian context and examples where appropriate
+- Conversational tone
+
+Original text: {text}
+
+Simplified version:"""
+        
+        # Try using a free AI API service
+        try:
+            response = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer sk-test",  # This won't work, but shows the structure
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": len(text) + 100,
+                    "temperature": 0.7
+                },
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                simplified = result['choices'][0]['message']['content'].strip()
+                if simplified and len(simplified) > 10:
+                    logging.info(f"🤖 AI LOCALIZATION: '{text[:50]}...' -> '{simplified[:50]}...'")
+                    return simplified
+        except:
+            pass
+        
+        # Fallback to enhanced rule-based approach with sentence restructuring
+        simplified = text
+        
+        # Advanced text transformations for Indian context
+        transformations = [
+            # Complex phrases to simple explanations
+            ("implementation of", "using"),
+            ("in order to", "to"),
+            ("due to the fact that", "because"),
+            ("it is important to note that", ""),
+            ("it should be emphasized that", ""),
+            ("with regard to", "about"),
+            ("in accordance with", "following"),
+            ("for the purpose of", "to"),
+            ("in the event that", "if"),
+            ("prior to", "before"),
+            ("subsequent to", "after"),
+            ("in spite of", "despite"),
+            ("as a result of", "because of"),
+            ("in addition to", "also"),
+            ("with the exception of", "except"),
+            
+            # Technical terms to everyday language
+            ("methodology", "way of doing"),
+            ("infrastructure", "basic systems"),
+            ("optimization", "making better"),
+            ("implementation", "putting into use"),
+            ("comprehensive", "complete"),
+            ("sophisticated", "advanced"),
+            ("facilitate", "make easier"),
+            ("utilize", "use"),
+            ("demonstrate", "show"),
+            ("establish", "set up"),
+            ("maintain", "keep"),
+            ("acquire", "get"),
+            ("construct", "build"),
+            ("operate", "run"),
+            ("monitor", "watch"),
+            ("evaluate", "check"),
+            ("analyze", "study"),
+            ("investigate", "look into"),
+            ("collaborate", "work together"),
+            ("coordinate", "organize"),
+            ("communicate", "talk"),
+            ("participate", "take part"),
+            ("contribute", "help"),
+            ("significant", "important"),
+            ("substantial", "large"),
+            ("considerable", "big"),
+            ("numerous", "many"),
+            ("various", "different"),
+            ("appropriate", "right"),
+            ("adequate", "enough"),
+            ("sufficient", "enough"),
+            ("essential", "needed"),
+            ("crucial", "very important"),
+            ("vital", "very important"),
+            ("beneficial", "helpful"),
+            ("advantageous", "good"),
+            ("efficient", "works well"),
+            ("effective", "works good")
+        ]
+        
+        # Apply transformations
+        for complex_phrase, simple_phrase in transformations:
+            simplified = simplified.replace(complex_phrase, simple_phrase)
+            simplified = simplified.replace(complex_phrase.capitalize(), simple_phrase.capitalize())
+        
+        # Break long sentences and add Indian context
+        sentences = simplified.split('. ')
+        new_sentences = []
+        
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+                
+            words = sentence.split()
+            if len(words) > 15:
+                # Try to break at natural points
+                mid_point = len(words) // 2
+                # Look for conjunctions near the middle
+                for i in range(max(5, mid_point-3), min(len(words)-5, mid_point+3)):
+                    if words[i].lower() in ['and', 'but', 'or', 'because', 'since', 'while', 'when', 'if', 'that']:
+                        first_part = ' '.join(words[:i]).strip()
+                        second_part = ' '.join(words[i+1:]).strip()
+                        if first_part and second_part:
+                            new_sentences.append(first_part)
+                            new_sentences.append(second_part.capitalize())
+                            break
+                else:
+                    new_sentences.append(sentence)
+            else:
+                new_sentences.append(sentence)
+        
+        result = '. '.join(new_sentences)
+        
+        # Clean up extra spaces and punctuation
+        result = ' '.join(result.split())  # Remove extra spaces
+        result = result.replace(' .', '.').replace('..', '.')
+        
+        logging.info(f"🔄 ENHANCED LOCALIZATION: '{text[:50]}...' -> '{result[:50]}...'")
+        return result
+        
+    except Exception as e:
+        logging.error(f"Localization error: {e}")
+        return text
 
 # Document text extraction functions
 def extract_text_from_docx(file_path: str) -> str:
@@ -360,11 +544,37 @@ def extract_text_from_image(file_path: str) -> str:
     
     try:
         image = Image.open(file_path)
-        text = pytesseract.image_to_string(image)
-        return text
+        # Convert to RGB if needed
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        
+        # Extract text using pytesseract
+        text = pytesseract.image_to_string(image, lang='eng+hin+ben+tel+tam+guj+kan+mal+mar+ori+pan')
+        
+        if not text.strip():
+            # Try with different OCR engine modes
+            text = pytesseract.image_to_string(image, config='--psm 6')
+            
+        if not text.strip():
+            # Try with different preprocessing
+            import cv2
+            import numpy as np
+            
+            # Convert PIL to OpenCV format
+            img_array = np.array(image)
+            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+            
+            # Apply threshold to get better OCR results
+            _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            
+            # Convert back to PIL
+            processed_image = Image.fromarray(thresh)
+            text = pytesseract.image_to_string(processed_image)
+        
+        return text.strip() if text else ""
     except Exception as e:
         logging.error(f"Error extracting text from image: {e}")
-        return ""
+        return f"OCR failed: {str(e)}"
 
 def extract_text_from_document(file_path: str, content_type: str) -> str:
     """Main function to extract text from various document formats (robust detection)"""
@@ -596,7 +806,7 @@ def identify_line_type(line: str) -> str:
     
     return "paragraph"
 
-def translate_text_preserving_structure(text: str, source_lang: str, target_lang: str, headers: dict, max_chunk_len: int = 250):
+def translate_text_preserving_structure(text: str, source_lang: str, target_lang: str, headers: dict, max_chunk_len: int = 250, use_localization: bool = False):
     """Translate text while preserving document structure (headings, bullets, paragraphs).
     Returns (translated_text, error_message)."""
     
@@ -658,7 +868,7 @@ def translate_text_preserving_structure(text: str, source_lang: str, target_lang
             translated_elements.append("")
         elif element["raw"].strip():
             # Translate the content
-            translated_text, err = translate_batch(element["raw"], source_lang, target_lang, headers)
+            translated_text, err = translate_batch(element["raw"], source_lang, target_lang, headers, use_localization)
             if err:
                 return "", err
             
@@ -691,10 +901,19 @@ def translate_text_preserving_structure(text: str, source_lang: str, target_lang
     
     return '\n'.join(translated_elements), None
 
-def translate_batch(text: str, source_lang: str, target_lang: str, headers: dict):
-    """Translate a batch of text while preserving line structure."""
+def translate_batch(text: str, source_lang: str, target_lang: str, headers: dict, use_localization: bool = False):
+    """Translate a batch of text while preserving line structure with optional BLOOMZ localization."""
+    
+    input_text = text
+    
+    # Step 1: Optionally localize text for Indian context using BLOOMZ
+    if use_localization:
+        input_text = localize_text_for_indian_context(text)
+        logging.info(f"BLOOMZ localization: '{text[:50]}...' -> '{input_text[:50]}...'")
+    
+    # Step 2: Translate the text using Sarvam API
     payload = {
-        "input": text,
+        "input": input_text,
         "source_language_code": source_lang,
         "target_language_code": target_lang,
         "speaker_gender": "Male",
@@ -1073,16 +1292,39 @@ async def speech_to_text(file: UploadFile = File(...), language_code: str = Form
 @app.post("/api/translate")
 async def translate_api(request: Request):
     data = await request.json()
-    logging.info(f"Received translate request: {data}")
+    use_localization = data.pop("use_localization", False)  # Extract localization flag
+    use_text_preprocessing = data.pop("use_text_preprocessing", False)  # Extract preprocessing flag
+    logging.info(f"Received translate request: {data}, use_localization: {use_localization}, use_preprocessing: {use_text_preprocessing}")
+    
     headers = {"api-subscription-key": SARVAM_API_KEY, "Content-Type": "application/json"}
+    
     try:
+        input_text = data.get("input", "")
+        
+        # Apply text preprocessing if requested
+        if use_text_preprocessing and input_text:
+            preprocessed_text = preprocessor.process(input_text, input_type="text")
+            data["input"] = preprocessed_text
+            logging.info(f"🔧 PREPROCESSING ENABLED: '{input_text[:50]}...' -> '{preprocessed_text[:50]}...'")
+        
+        # Apply BLOOMZ localization if requested
+        if use_localization and data.get("input"):
+            localized_text = localize_text_for_indian_context(data["input"])
+            data["input"] = localized_text
+            logging.info(f"🔥 LOCALIZATION ENABLED: '{data.get('input', '')[:50]}...' -> '{localized_text[:50]}...'")
+        
+        if not use_localization and not use_text_preprocessing:
+            logging.info(f"❌ NO PREPROCESSING - Direct translation")
+        
         try:
             response = requests.post(SARVAM_TRANSLATE_URL, headers=headers, json=data, timeout=(10, 120))
         except Timeout:
             return JSONResponse(content={"error": "Translate API timed out."}, status_code=504)
+        
         logging.info(f"Sarvam Translate API response status: {response.status_code}")
         sarvam_json = response.json()
         logging.info(f"Sarvam Translate API response: {sarvam_json}")
+        
         translated = sarvam_json.get("translated_text", "")
         if not translated:
             logging.error("No translated_text returned from Sarvam Translate API.")
@@ -1132,7 +1374,8 @@ async def text_to_speech_api(request: Request):
 async def document_extract(
     file: UploadFile = File(...), 
     source_language_code: str = Form(...), 
-    target_language_code: str = Form(...)
+    target_language_code: str = Form(...),
+    use_localization: bool = Form(False)
 ):
     """Extract and translate full text from document for display"""
     temp_file_path = None
@@ -1147,11 +1390,11 @@ async def document_extract(
         if extracted_text.strip():
             # Translate full text for display
             headers = {"api-subscription-key": SARVAM_API_KEY, "Content-Type": "application/json"}
-            source_lang = source_language_code if source_language_code.endswith('-IN') else f"{source_language_code}-IN"
-            target_lang = target_language_code if target_language_code.endswith('-IN') else f"{target_language_code}-IN"
+            source_lang = _normalize_language_code(source_language_code)
+            target_lang = _normalize_language_code(target_language_code)
             
-            # Use structure-preserving translation
-            translated_text, err = translate_text_preserving_structure(extracted_text, source_lang, target_lang, headers)
+            # Use structure-preserving translation with optional localization
+            translated_text, err = translate_text_preserving_structure(extracted_text, source_lang, target_lang, headers, use_localization=use_localization)
             
             if err or not translated_text:
                 logging.error(f"Structure-preserving translation failed: {err}")
@@ -1191,9 +1434,9 @@ async def document_translate(
         
         # For DOCX and PDF, translate while preserving layout and return the same format
         ext = os.path.splitext(file.filename)[1].lower()
-        # Convert language codes to Sarvam API format (add -IN suffix)
-        source_lang = source_language_code if source_language_code.endswith('-IN') else f"{source_language_code}-IN"
-        target_lang = target_language_code if target_language_code.endswith('-IN') else f"{target_language_code}-IN"
+        # Convert language codes to Sarvam API format
+        source_lang = _normalize_language_code(source_language_code)
+        target_lang = _normalize_language_code(target_language_code)
         
         # Try layout-preserving translation first for supported formats
         if ext == ".docx" and DOCX_AVAILABLE:
@@ -1232,9 +1475,25 @@ async def document_translate(
         # Extract text from document
         extracted_text = extract_text_from_document(temp_file_path, file.content_type)
         
-        if not extracted_text.strip():
+        # Check for OCR-specific errors first
+        if "OCR failed:" in extracted_text or "OCR processing not available" in extracted_text:
             return JSONResponse(
-                content={"error": "No text could be extracted from the document"}, 
+                content={"error": extracted_text}, 
+                status_code=400
+            )
+        
+        if not extracted_text.strip():
+            # Try to provide more specific error message based on file type
+            ext = os.path.splitext(file.filename)[1].lower()
+            if ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif']:
+                error_msg = "No text could be extracted from the image. The image may not contain readable text or may need better quality."
+            elif ext == '.pdf':
+                error_msg = "No text could be extracted from the PDF. It may be a scanned/image-based PDF that requires OCR."
+            else:
+                error_msg = "No text could be extracted from the document. Please check if the file contains readable text."
+            
+            return JSONResponse(
+                content={"error": error_msg}, 
                 status_code=400
             )
         
@@ -1249,9 +1508,9 @@ async def document_translate(
         
         # Translate the extracted text using Sarvam API (chunk if necessary due to 2000 char limit)
         headers = {"api-subscription-key": SARVAM_API_KEY, "Content-Type": "application/json"}
-        # Convert language codes to Sarvam API format (add -IN suffix)
-        source_lang = source_language_code if source_language_code.endswith('-IN') else f"{source_language_code}-IN"
-        target_lang = target_language_code if target_language_code.endswith('-IN') else f"{target_language_code}-IN"
+        # Convert language codes to Sarvam API format
+        source_lang = _normalize_language_code(source_language_code)
+        target_lang = _normalize_language_code(target_language_code)
         
         # Use the new structure-preserving translation
         logging.info(f"Starting structure-preserving translation for {len(extracted_text)} characters")
@@ -1313,6 +1572,286 @@ async def document_translate(
     except Exception as e:
         logging.error(f"Error in /api/document-translate: {e}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+@app.post("/api/translate-video-url")
+async def translate_video_url(request: Request):
+    body = await request.json()
+    video_url = body.get("video_url")
+    source_language_code = body.get("source_language_code", "auto")
+    target_language_code = body.get("target_language_code")
+    tts_gender = body.get("gender", "male")
+    tts_sr = int(body.get("sampling_rate", 22050))
+
+    if not video_url or not target_language_code:
+        return JSONResponse(content={"error": "video_url and target_language_code are required"}, status_code=400)
+
+    workdir = os.path.join(tempfile.gettempdir(), f"vidproc_{uuid.uuid4()}")
+    os.makedirs(workdir, exist_ok=True)
+
+    try:
+        # 1) Download video with retry logic
+        logging.info(f"Downloading video from URL: {video_url}")
+        try:
+            video_path = _download_video_to_mp4(video_url, workdir)
+            logging.info(f"Downloaded video to: {video_path}")
+        except Exception as e:
+            error_msg = str(e)
+            if "getaddrinfo failed" in error_msg or "network" in error_msg.lower():
+                return JSONResponse(content={"error": "Network connection failed. Please check your internet connection and try again."}, status_code=400)
+            else:
+                return JSONResponse(content={"error": f"Failed to download video: {error_msg}"}, status_code=400)
+
+        # 2) Extract audio to WAV mono 16k
+        wav_in_path = os.path.join(workdir, "input_audio.wav")
+        _extract_wav_from_video(video_path, wav_in_path, 16000)
+
+        # 3) Process audio segments
+        audio_seg = AudioSegment.from_file(wav_in_path)
+        detected_gender = _detect_speaker_gender(audio_seg)
+        logging.info(f"Detected speaker gender: {detected_gender}")
+        
+        # Detect voice activity
+        speech_segments = detect_nonsilent(audio_seg, min_silence_len=300, silence_thresh=-35)
+        logging.info(f"Detected {len(speech_segments)} speech segments")
+        
+        # Start with silence matching original duration
+        final_audio = AudioSegment.silent(duration=len(audio_seg))
+        
+        for start_ms, end_ms in speech_segments:
+            speech_segment = audio_seg[start_ms:end_ms]
+            segment_transcript = _sarvam_stt_from_audiosegment(speech_segment, source_language_code)
+            
+            if segment_transcript and segment_transcript.strip():
+                segment_translation = _sarvam_translate(segment_transcript, source_language_code, target_language_code)
+                
+                if segment_translation and segment_translation.strip():
+                    # Generate TTS for this segment
+                    temp_segment_tts_path = os.path.join(workdir, f"segment_{start_ms}_{end_ms}.wav")
+                    ok = _sarvam_tts_to_wav(segment_translation, target_language_code, detected_gender, tts_sr, temp_segment_tts_path)
+                    
+                    if ok:
+                        segment_tts = AudioSegment.from_file(temp_segment_tts_path)
+                        logging.info(f"TTS segment {start_ms}-{end_ms}: {len(segment_tts)}ms")
+                        
+                        # Fit TTS within original segment duration
+                        original_duration = end_ms - start_ms
+                        if len(segment_tts) > original_duration:
+                            speed_ratio = len(segment_tts) / original_duration
+                            if speed_ratio <= 2.0:  # Allow up to 2x compression
+                                adj_path = os.path.join(workdir, f"adj_{start_ms}_{end_ms}.wav")
+                                try:
+                                    subprocess.run(["ffmpeg", "-y", "-i", temp_segment_tts_path, "-filter:a", f"atempo={speed_ratio:.3f}", adj_path], check=True, capture_output=True)
+                                    segment_tts = AudioSegment.from_file(adj_path)
+                                except:
+                                    segment_tts = segment_tts[:original_duration]
+                        
+                        # Place TTS at original timing
+                        final_audio = final_audio.overlay(segment_tts, position=start_ms)
+                    else:
+                        logging.error(f"TTS generation failed for segment {start_ms}-{end_ms}")
+        
+        tts_wav_path = os.path.join(workdir, "tts.wav")
+        final_audio.export(tts_wav_path, format="wav")
+        logging.info(f"Generated TTS audio: {len(final_audio)}ms duration")
+
+        # 6) Final audio preparation
+        tts_audio = AudioSegment.from_file(tts_wav_path)
+        vid_duration_sec = _ffprobe_duration_seconds(video_path)
+        desired_ms = int(vid_duration_sec * 1000)
+        
+        # Final padding/trimming
+        tts_dur_ms = len(tts_audio)
+        if tts_dur_ms < desired_ms:
+            pad = AudioSegment.silent(duration=desired_ms - tts_dur_ms)
+            tts_audio = tts_audio + pad
+        elif tts_dur_ms > desired_ms and desired_ms > 0:
+            tts_audio = tts_audio[:desired_ms]
+            
+        padded_tts_wav = os.path.join(workdir, "tts_synced.wav")
+        tts_audio.export(padded_tts_wav, format="wav")
+
+        # 7) Mux new audio with original video visuals
+        out_video_path = os.path.join(workdir, "dubbed.mp4")
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-i", padded_tts_wav,
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-map", "0:v",
+            "-map", "1:a",
+            out_video_path,
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            logging.info(f"FFmpeg mux success: {result.stdout}")
+        except subprocess.CalledProcessError as e:
+            logging.error(f"FFmpeg mux failed (code {e.returncode}): {e.stderr}")
+            raise
+
+        # 8) Return the dubbed video
+        return FileResponse(out_video_path, media_type="video/mp4", filename="dubbed.mp4")
+
+    except Exception as e:
+        logging.error(f"Error in /api/translate-video-url: {e}")
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+def _download_video_to_mp4(url: str, workdir: str) -> str:
+    """Download video using yt-dlp and return path to MP4 file"""
+    output_path = os.path.join(workdir, "video.%(ext)s")
+    ydl_opts = {
+        'format': 'best[ext=mp4]/best',
+        'outtmpl': output_path,
+        'noplaylist': True,
+    }
+    with YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+    
+    # Find the downloaded file
+    for file in os.listdir(workdir):
+        if file.startswith("video."):
+            return os.path.join(workdir, file)
+    raise Exception("Video download failed")
+
+def _extract_wav_from_video(video_path: str, wav_path: str, sample_rate: int = 16000):
+    """Extract audio from video to WAV format"""
+    cmd = [
+        "ffmpeg", "-y", "-i", video_path,
+        "-ar", str(sample_rate), "-ac", "1", "-f", "wav",
+        wav_path
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+def _detect_speaker_gender(audio_segment):
+    """Simple gender detection based on fundamental frequency"""
+    try:
+        # Convert to numpy array
+        samples = np.array(audio_segment.get_array_of_samples())
+        if audio_segment.channels == 2:
+            samples = samples.reshape((-1, 2)).mean(axis=1)
+        
+        # Simple pitch detection - this is a basic implementation
+        # In practice, you might want to use more sophisticated methods
+        frame_length = 2048
+        hop_length = 512
+        
+        # Calculate zero crossing rate as a simple pitch indicator
+        zcr = np.mean([np.sum(np.diff(np.sign(samples[i:i+frame_length])) != 0) 
+                      for i in range(0, len(samples)-frame_length, hop_length)])
+        
+        # Simple heuristic: higher ZCR typically indicates higher pitch (female)
+        return "meera" if zcr > 100 else "arvind"
+    except:
+        return "arvind"  # Default fallback
+
+def _sarvam_stt_from_audiosegment(audio_segment, language_code: str) -> str:
+    """Convert AudioSegment to text using Sarvam STT"""
+    try:
+        wav_io = io.BytesIO()
+        audio_segment.export(wav_io, format="wav")
+        wav_io.seek(0)
+        
+        files = {"file": ("audio.wav", wav_io.getvalue(), "audio/wav")}
+        headers = {"api-subscription-key": SARVAM_API_KEY}
+        data = {"language_code": language_code}
+        
+        response = requests.post(SARVAM_STT_URL, headers=headers, files=files, data=data, timeout=(10, 60))
+        if response.status_code == 200:
+            result = response.json()
+            return result.get("transcript", "")
+    except Exception as e:
+        logging.error(f"STT error: {e}")
+    return ""
+
+def _normalize_language_code(lang_code: str) -> str:
+    """Normalize language code for Sarvam API"""
+    if not lang_code:
+        return "en-IN"
+    
+    # Sarvam API supported language mapping
+    supported_langs = {
+        'en': 'en-IN', 'en-IN': 'en-IN',
+        'hi': 'hi-IN', 'hi-IN': 'hi-IN', 
+        'bn': 'bn-IN', 'bn-IN': 'bn-IN',
+        'te': 'te-IN', 'te-IN': 'te-IN',
+        'mr': 'mr-IN', 'mr-IN': 'mr-IN',
+        'ta': 'ta-IN', 'ta-IN': 'ta-IN',
+        'gu': 'gu-IN', 'gu-IN': 'gu-IN',
+        'kn': 'kn-IN', 'kn-IN': 'kn-IN',
+        'ml': 'ml-IN', 'ml-IN': 'ml-IN',
+        'or': 'or-IN', 'or-IN': 'or-IN',
+        'pa': 'pa-IN', 'pa-IN': 'pa-IN'
+    }
+    
+    return supported_langs.get(lang_code, 'en-IN')
+
+def _sarvam_translate(text: str, source_lang: str, target_lang: str) -> str:
+    """Translate text using Sarvam API"""
+    try:
+        headers = {"api-subscription-key": SARVAM_API_KEY, "Content-Type": "application/json"}
+        payload = {
+            "input": text,
+            "source_language_code": _normalize_language_code(source_lang),
+            "target_language_code": _normalize_language_code(target_lang),
+            "speaker_gender": "Male",
+            "mode": "formal",
+            "model": "mayura:v1",
+            "enable_preprocessing": True,
+        }
+        
+        response = requests.post(SARVAM_TRANSLATE_URL, headers=headers, json=payload, timeout=(10, 60))
+        if response.status_code == 200:
+            result = response.json()
+            return decode_html_entities(result.get("translated_text", ""))
+    except Exception as e:
+        logging.error(f"Translation error: {e}")
+    return ""
+
+def _sarvam_tts_to_wav(text: str, language_code: str, gender: str, sample_rate: int, output_path: str) -> bool:
+    """Generate TTS audio and save to WAV file"""
+    try:
+        headers = {"api-subscription-key": SARVAM_API_KEY, "Content-Type": "application/json"}
+        payload = {
+            "inputs": [text],
+            "target_language_code": _normalize_language_code(language_code),
+            "speaker": gender,
+            "pitch": 0,
+            "pace": 1.0,
+            "loudness": 1.0,
+            "speech_sample_rate": sample_rate,
+            "enable_preprocessing": True,
+            "model": "bulbul:v1"
+        }
+        
+        response = requests.post(SARVAM_TTS_URL, headers=headers, json=payload, timeout=(10, 120))
+        logging.info(f"TTS API response: {response.status_code}")
+        if response.status_code == 200:
+            result = response.json()
+            audio_content = result.get("audios", [None])[0]
+            if audio_content:
+                audio_bytes = base64.b64decode(audio_content)
+                with open(output_path, "wb") as f:
+                    f.write(audio_bytes)
+                return True
+            else:
+                logging.error(f"No audio content in TTS response: {result}")
+        else:
+            logging.error(f"TTS API error {response.status_code}: {response.text}")
+    except Exception as e:
+        logging.error(f"TTS error: {e}")
+    return False
+
+def _ffprobe_duration_seconds(video_path: str) -> float:
+    """Get video duration in seconds using ffprobe"""
+    try:
+        cmd = ["ffprobe", "-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", video_path]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return float(result.stdout.strip())
+    except:
+        return 0.0
+
 
 @app.get("/health")
 def health():

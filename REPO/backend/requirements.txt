@@ -3,4 +3,16 @@ uvicorn[standard]
 pydub
 requests
 python-multipart
-python-dotenv 
+python-dotenv
+python-docx
+PyPDF2
+python-pptx
+openpyxl
+xlrd
+pandas
+Pillow
+pytesseract
+yt-dlp
+silero-vad
+numpy
+torch
