@@ -2,23 +2,25 @@ import React, { useState, useRef, useEffect } from 'react';
 import Recorder from 'recorder-js';
 import WavEncoder from 'wav-encoder';
 
-// Language options
+// Language options - Sarvam API supported languages
 const LANGUAGE_OPTIONS = [
   { code: 'en-IN', label: 'English' },
-  { code: 'te-IN', label: 'Telugu' },
-  { code: 'hi-IN', label: 'Hindi' },
-  { code: 'ta-IN', label: 'Tamil' },
-  { code: 'kn-IN', label: 'Kannada' },
-  { code: 'ml-IN', label: 'Malayalam' },
-  { code: 'bn-IN', label: 'Bengali' },
-  { code: 'gu-IN', label: 'Gujarati' },
-  { code: 'mr-IN', label: 'Marathi' },
-  { code: 'pa-IN', label: 'Punjabi' }
+  { code: 'hi-IN', label: 'Hindi (हिन्दी)' },
+  { code: 'bn-IN', label: 'Bengali (বাংলা)' },
+  { code: 'te-IN', label: 'Telugu (తెలుగు)' },
+  { code: 'mr-IN', label: 'Marathi (मराठी)' },
+  { code: 'ta-IN', label: 'Tamil (தமிழ்)' },
+  { code: 'gu-IN', label: 'Gujarati (ગુજરાતી)' },
+  { code: 'kn-IN', label: 'Kannada (ಕನ್ನಡ)' },
+  { code: 'ml-IN', label: 'Malayalam (മലയാളം)' },
+  { code: 'or-IN', label: 'Odia (ଓଡ଼ିଆ)' },
+  { code: 'pa-IN', label: 'Punjabi (ਪੰਜਾਬੀ)' }
 ];
 
 const INPUT_SOURCES = [
   { value: 'microphone', label: 'Microphone' },
   { value: 'file', label: 'Upload File' },
+  { value: 'document', label: 'Upload Document' },
   { value: 'text', label: 'Text Input' },
 ];
 
@@ -62,12 +64,19 @@ function InputPanel({
   outputLang, setOutputLang,
   languageOptions,
   file, handleFileChange,
+  documentFile, handleDocumentChange,
   micStatus, handleMicRecord,
   onClear,
   isRecording,
   autoPlayEnabled,
   setAutoPlayEnabled,
   stopAutoPlay,
+  videoUrl,
+  setVideoUrl,
+  isProcessingVideo,
+  handleProcessVideoUrl,
+  useLocalization,
+  setUseLocalization,
 }) {
   return (
     <div className="input-panel">
@@ -101,6 +110,51 @@ function InputPanel({
             <input type="file" accept="audio/*,video/*" onChange={handleFileChange} />
             {file && <div className="file-selected">✅ {file.name}</div>}
           </label>
+
+          <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <input
+              type="text"
+              placeholder="Paste video URL (YouTube, etc.)"
+              value={videoUrl}
+              onChange={e => setVideoUrl(e.target.value)}
+              style={{ flex: 1, minWidth: 240, padding: '10px 12px', border: '1.5px solid #d1d5db', borderRadius: 8 }}
+            />
+            <button
+              onClick={handleProcessVideoUrl}
+              disabled={!videoUrl || isProcessingVideo}
+              className="clear-btn"
+              style={{ width: 'auto', padding: '10px 16px' }}
+              title="Download and translate video audio"
+            >
+              {isProcessingVideo ? 'Processing…' : 'Translate Video URL'}
+            </button>
+          </div>
+          <div style={{ marginTop: 6, color: '#6b7280', fontSize: 12 }}>
+            Paste a YouTube or public video link (max 5 minutes). The audio will be transcribed, translated, and muxed back into the video.
+            <br /><strong>Note:</strong> Processing may take 2-5 minutes depending on video length.
+          </div>
+        </div>
+      )}
+
+      {inputSource === 'document' && (
+        <div className="document-upload-section">
+          <label className="upload-area">
+            <div className="upload-icon">📄</div>
+            <div className="upload-text">
+              <strong>Drop Document File</strong>
+              <span>- or -</span>
+              <span>Click to Browse</span>
+            </div>
+            <input 
+              type="file" 
+              accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.gif,.bmp,.tiff" 
+              onChange={handleDocumentChange} 
+            />
+            {documentFile && <div className="file-selected">✅ {documentFile.name}</div>}
+          </label>
+          <div className="supported-formats">
+            <small>Supported: PDF, DOCX, TXT, Images (PNG, JPG, JPEG)</small>
+          </div>
         </div>
       )}
 
@@ -146,8 +200,27 @@ function InputPanel({
           label="Output Language"
           value={outputLang}
           onChange={e => setOutputLang(e.target.value)}
-          options={languageOptions.filter(opt => opt.code !== 'en-IN')}
+          options={languageOptions}
         />
+      </div>
+
+      <div className="localization-section">
+        <label className="localization-toggle">
+          <input 
+            type="checkbox" 
+            checked={useLocalization} 
+            onChange={(e) => {
+              const newValue = e.target.checked;
+              console.log('🔄 Localization toggle changed:', newValue);
+              setUseLocalization(newValue);
+            }}
+          />
+          <span className="toggle-slider"></span>
+          <span className="toggle-label">
+            Best Localization
+          </span>
+        </label>
+
       </div>
 
       {inputSource === 'microphone' && (
@@ -201,6 +274,7 @@ function App() {
   const [inputSource, setInputSource] = useState('text');
   const [inputLang, setInputLang] = useState('en-IN');
   const [outputLang, setOutputLang] = useState('te-IN');
+  const [useLocalization, setUseLocalization] = useState(false);
   const [originalText, setOriginalText] = useState('');
   const [translatedText, setTranslatedText] = useState('');
   const [history, setHistory] = useState([]);
@@ -208,6 +282,12 @@ function App() {
   const [isPlayingOriginal, setIsPlayingOriginal] = useState(false);
   const [isPlayingTranslated, setIsPlayingTranslated] = useState(false);
   const [file, setFile] = useState(null);
+  const [documentFile, setDocumentFile] = useState(null);
+  const [isProcessingDocument, setIsProcessingDocument] = useState(false);
+  const [translatedDocumentUrl, setTranslatedDocumentUrl] = useState(null);
+  const [videoUrl, setVideoUrl] = useState('');
+  const [isProcessingVideo, setIsProcessingVideo] = useState(false);
+  const [dubbedVideoUrl, setDubbedVideoUrl] = useState(null);
   const [micStatus, setMicStatus] = useState('idle');
   const debounceRef = useRef(null);
   const [isRecording, setIsRecording] = useState(false);
@@ -234,6 +314,7 @@ function App() {
   const getLeftLabel = () => {
     switch (inputSource) {
       case 'file': return 'File Input';
+      case 'document': return 'Document Input';
       case 'microphone': return 'Speech Input';
       case 'text': return 'Text Input';
       default: return 'Original Text';
@@ -243,6 +324,7 @@ function App() {
   const getRightLabel = () => {
     switch (inputSource) {
       case 'file': return 'File Translation';
+      case 'document': return 'Document Translation';
       case 'microphone': return 'Speech Translation';
       case 'text': return 'Text Translation';
       default: return 'Translated Text';
@@ -366,6 +448,15 @@ function App() {
     setTranslatedText('');
     originalTextRef.current = '';
     translatedTextRef.current = '';
+    setTranslatedDocumentUrl(null);
+    
+    // Video URL related cleanup
+    if (dubbedVideoUrl) { 
+      try { URL.revokeObjectURL(dubbedVideoUrl); } catch (e) {} 
+    }
+    setDubbedVideoUrl(null);
+    setVideoUrl('');
+    setIsProcessingVideo(false);
     
     // Disable auto-play when switching away from microphone
     if (inputSource !== 'microphone' && autoPlayEnabled) {
@@ -416,7 +507,9 @@ function App() {
           speaker_gender: 'Male',
           mode: 'formal',
           model: 'mayura:v1',
-          enable_preprocessing: true
+          enable_preprocessing: true,
+          use_localization: useLocalization,
+          use_text_preprocessing: true
         })
       });
       const data = await response.json();
@@ -675,6 +768,111 @@ const speechToText = async (audioBlob, languageCode) => {
       setOriginalText(transcript);
       // For file input, do not use refs, just update state
       translateText(transcript, inputLang, outputLang);
+    }
+  };
+
+  // Handle document upload and processing
+  const handleDocumentChange = async (e) => {
+    const selectedFile = e.target.files[0];
+    setDocumentFile(selectedFile);
+    
+    if (selectedFile) {
+      setIsProcessingDocument(true);
+      setOriginalText(`Processing document: ${selectedFile.name}...`);
+      setTranslatedText('');
+      setTranslatedDocumentUrl(null);
+      
+      try {
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+        formData.append('source_language_code', inputLang);
+        formData.append('target_language_code', outputLang);
+        formData.append('use_localization', useLocalization);
+        
+        const response = await fetch('http://localhost:8000/api/document-translate', {
+          method: 'POST',
+          body: formData,
+        });
+        
+        if (response.ok) {
+          // Get the translated document
+          const blob = await response.blob();
+          
+          // Extract filename from response headers or create one
+          const contentDisposition = response.headers.get('content-disposition');
+          let filename = 'translated_document.txt';
+          if (contentDisposition) {
+            const filenameMatch = contentDisposition.match(/filename="(.+)"/);
+            if (filenameMatch) {
+              filename = filenameMatch[1];
+            }
+          } else {
+            // Create filename based on original file and format
+            const originalExt = selectedFile.name.split('.').pop().toLowerCase();
+            const baseName = selectedFile.name.replace(/\.[^/.]+$/, "");
+            if (originalExt === 'pdf' || originalExt === 'docx') {
+              filename = `translated_${baseName}.${originalExt}`;
+            } else {
+              filename = `translated_${baseName}.txt`;
+            }
+          }
+          
+          // Remove automatic download - just store for manual download
+          
+          // Store document for download button and get text content
+          const docUrl = URL.createObjectURL(blob);
+          setTranslatedDocumentUrl({ url: docUrl, filename });
+          
+          // Get actual text content for display
+          try {
+            const extractFormData = new FormData();
+            extractFormData.append('file', selectedFile);
+            extractFormData.append('source_language_code', inputLang);
+            extractFormData.append('target_language_code', outputLang);
+            extractFormData.append('use_localization', useLocalization);
+            
+            const textResponse = await fetch('http://localhost:8000/api/document-extract', {
+              method: 'POST',
+              body: extractFormData,
+            });
+            
+            if (textResponse.ok) {
+              const textData = await textResponse.json();
+              setOriginalText(textData.extracted_text || `Document processed: ${selectedFile.name}`);
+              setTranslatedText(textData.translated_text || `Translation completed! Click download button below.`);
+            } else {
+              setOriginalText(`Document processed successfully: ${selectedFile.name}`);
+              setTranslatedText(`Translation completed! Click download button below.`);
+            }
+          } catch (error) {
+            console.error('Error getting text content:', error);
+            setOriginalText(`Document processed successfully: ${selectedFile.name}`);
+            setTranslatedText(`Translation completed! Click download button below.`);
+          }
+          
+          // Add to history
+          setHistory(prev => [
+            {
+              original: `Document: ${selectedFile.name}`,
+              translated: `Translated document: ${filename}`,
+              inputLang: inputLang,
+              outputLang: outputLang,
+              timestamp: new Date().toLocaleTimeString()
+            },
+            ...prev.slice(0, 9)
+          ]);
+        } else {
+          const errorData = await response.json();
+          setOriginalText(`Error processing document: ${errorData.error || 'Unknown error'}`);
+          setTranslatedText('');
+        }
+      } catch (error) {
+        console.error('Document processing error:', error);
+        setOriginalText(`Error processing document: ${error.message}`);
+        setTranslatedText('');
+      } finally {
+        setIsProcessingDocument(false);
+      }
     }
   };
 
@@ -1009,6 +1207,189 @@ const processAudioChunk = async (audioData) => {
   }
 };
 
+  // Function to decode HTML entities
+  const decodeHtmlEntities = (text) => {
+    const textarea = document.createElement('textarea');
+    textarea.innerHTML = text;
+    return textarea.value;
+  };
+
+  // Download translated text function
+  const downloadTranslatedText = (text, sourceLang, targetLang) => {
+    if (!text || !text.trim()) return;
+    
+    // Decode HTML entities in the text
+    const decodedText = decodeHtmlEntities(text);
+    const decodedOriginalText = decodeHtmlEntities(originalText);
+    
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+    const sourceLabel = LANGUAGE_OPTIONS.find(lang => lang.code === sourceLang)?.label || sourceLang;
+    const targetLabel = LANGUAGE_OPTIONS.find(lang => lang.code === targetLang)?.label || targetLang;
+    const filename = `translation_${sourceLabel}_to_${targetLabel}_${timestamp}.txt`;
+    
+    const content = `Translation Report
+==================
+
+Source Language: ${sourceLabel} (${sourceLang})
+Target Language: ${targetLabel} (${targetLang})
+Timestamp: ${new Date().toLocaleString()}
+
+--- Original Text ---
+${decodedOriginalText}
+
+--- Translated Text ---
+${decodedText}
+
+--- Generated by Shiksha Lok ---
+AI-Powered Multilingual Content Localization Engine`;
+    
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    
+    const downloadLink = document.createElement('a');
+    downloadLink.href = url;
+    downloadLink.download = filename;
+    downloadLink.style.display = 'none';
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+    
+    // Clean up the URL after a short delay
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+    }, 1000);
+  };
+
+  // Format document text with proper styling
+  const formatDocumentText = (text) => {
+    if (!text) return 'Document content will appear here...';
+    
+    // Decode HTML entities first
+    const decodedText = decodeHtmlEntities(text);
+    
+    // Clean up the text - remove extra spaces and fix formatting
+    const cleanedText = decodedText
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/\s+/g, ' ')
+      .trim();
+    
+    // Split into paragraphs and format
+    const paragraphs = cleanedText.split(/\n\s*\n/);
+    const formattedParagraphs = [];
+    
+    for (let paragraph of paragraphs) {
+      paragraph = paragraph.trim();
+      if (!paragraph) continue;
+      
+      // Check if it's a heading (marked with **)
+      if (paragraph.startsWith('**') && paragraph.endsWith('**')) {
+        const headingText = paragraph.slice(2, -2);
+        formattedParagraphs.push(`<h3 class="doc-subheading">${headingText}</h3>`);
+      }
+      // Check if it contains bullet points or numbered lists
+      else if (/^[•\-\*]|^\d+\./m.test(paragraph)) {
+        const lines = paragraph.split('\n');
+        const listItems = lines.map(line => {
+          line = line.trim();
+          if (/^[•\-\*]/.test(line) || /^\d+\./.test(line)) {
+            return `<div class="doc-bullet">${line}</div>`;
+          }
+          return line ? `<p class="doc-paragraph">${line}</p>` : '';
+        }).filter(item => item);
+        formattedParagraphs.push(listItems.join(''));
+      }
+      // Regular paragraph
+      else {
+        formattedParagraphs.push(`<p class="doc-paragraph">${paragraph}</p>`);
+      }
+    }
+    
+    return formattedParagraphs.join('');
+  };
+
+  // Optimized video processing with progress tracking
+  const handleProcessVideoUrl = async () => {
+    if (!videoUrl) return;
+    
+    try {
+      setIsProcessingVideo(true);
+      setOriginalText('🔄 Processing video... This may take a few minutes.');
+      setTranslatedText('');
+      
+      // Revoke previous preview URL if any
+      if (dubbedVideoUrl) {
+        try { URL.revokeObjectURL(dubbedVideoUrl); } catch (e) {}
+        setDubbedVideoUrl(null);
+      }
+      
+      // Add timeout for long videos
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minute timeout
+      
+      const response = await fetch('http://localhost:8000/api/translate-video-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          video_url: videoUrl,
+          source_language_code: inputLang,
+          target_language_code: outputLang,
+          gender: 'male',
+          sampling_rate: 22050,
+          max_duration: 300 // Limit to 5 minutes
+        }),
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
+      const contentType = response.headers.get('content-type') || '';
+      
+      if (!response.ok) {
+        const errText = await response.text();
+        let errorMsg = 'Video processing failed';
+        
+        try {
+          const errorJson = JSON.parse(errText);
+          errorMsg = errorJson.error || errorMsg;
+        } catch (e) {
+          // Use default error message
+        }
+        
+        setOriginalText(`❌ Error: ${errorMsg}`);
+        setTranslatedText('Please try with a shorter video or check the URL.');
+        return;
+      }
+      
+      if (!contentType.includes('video')) {
+        setOriginalText('❌ Invalid response from server');
+        setTranslatedText('Please try again or contact support.');
+        return;
+      }
+      
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      setDubbedVideoUrl(url);
+      setOriginalText('✅ Video processing completed successfully!');
+      setTranslatedText('Your dubbed video is ready for download.');
+      
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        setOriginalText('⏰ Processing timeout - Video too long');
+        setTranslatedText('Please try with a shorter video (under 5 minutes).');
+      } else {
+        console.error('Failed processing video URL:', error);
+        setOriginalText('❌ Network error occurred');
+        setTranslatedText('Please check your connection and try again.');
+      }
+    } finally {
+      setIsProcessingVideo(false);
+    }
+  };
+
   const handleClear = () => {
     setOriginalText('');
     setTranslatedText('');
@@ -1016,6 +1397,14 @@ const processAudioChunk = async (audioData) => {
     setCurrentChunkTranslation('');
     setIsTranslating(false);
     setFile(null);
+    setDocumentFile(null);
+    setIsProcessingDocument(false);
+    setTranslatedDocumentUrl(null);
+    // Video URL related cleanup
+    if (dubbedVideoUrl) { try { URL.revokeObjectURL(dubbedVideoUrl); } catch (e) {} }
+    setDubbedVideoUrl(null);
+    setVideoUrl('');
+    setIsProcessingVideo(false);
     setMicStatus('idle');
     originalTextRef.current = '';
     translatedTextRef.current = '';
@@ -1030,13 +1419,22 @@ const processAudioChunk = async (audioData) => {
     };
   }, []);
 
-  // In useEffect for outputLang, only auto-translate for text/file input
+  // Auto-translate when output language or localization changes
   useEffect(() => {
     if (inputSource !== 'microphone' && originalText.trim() !== '') {
       translateText(originalText, inputLang, outputLang);
     }
     // eslint-disable-next-line
   }, [outputLang]);
+
+  // Auto-translate when localization toggle changes
+  useEffect(() => {
+    if (inputSource !== 'microphone' && originalText.trim() !== '') {
+      console.log('🔄 Localization changed, re-translating...', useLocalization);
+      translateText(originalText, inputLang, outputLang);
+    }
+    // eslint-disable-next-line
+  }, [useLocalization]);
 
   return (
     <div className={`app-container${theme === 'dark' ? ' dark-theme' : ''}`}>
@@ -1069,19 +1467,25 @@ const processAudioChunk = async (audioData) => {
               <div><strong>Current Speech:</strong> {currentChunkText}</div>
             </div>
           )}
-          <textarea
-            className="text-area"
-            value={originalText}
-            onChange={handleOriginalTextChange}
-            placeholder={
-              inputSource === 'text' 
-                ? "Enter text to translate..." 
-                : inputSource === 'microphone'
-                ? "Recorded speech will appear here..."
-                : "File content will appear here..."
-            }
-            readOnly={inputSource !== 'text'}
-          />
+          {inputSource === 'document' ? (
+            <div className="document-preview">
+              <div className="document-content" dangerouslySetInnerHTML={{ __html: formatDocumentText(originalText) }} />
+            </div>
+          ) : (
+            <textarea
+              className="text-area"
+              value={originalText}
+              onChange={handleOriginalTextChange}
+              placeholder={
+                inputSource === 'text' 
+                  ? "Enter text to translate..." 
+                  : inputSource === 'microphone'
+                  ? "Recorded speech will appear here..."
+                  : "File content will appear here..."
+              }
+              readOnly={inputSource !== 'text'}
+            />
+          )}
         </div>
 
         {/* Center Column - Controls */}
@@ -1096,6 +1500,8 @@ const processAudioChunk = async (audioData) => {
             languageOptions={LANGUAGE_OPTIONS}
             file={file}
             handleFileChange={handleFileChange}
+            documentFile={documentFile}
+            handleDocumentChange={handleDocumentChange}
             micStatus={micStatus}
             handleMicRecord={handleMicRecord}
             onClear={handleClear}
@@ -1103,6 +1509,12 @@ const processAudioChunk = async (audioData) => {
             autoPlayEnabled={autoPlayEnabled}
             setAutoPlayEnabled={setAutoPlayEnabled}
             stopAutoPlay={stopAutoPlay}
+            videoUrl={videoUrl}
+            setVideoUrl={setVideoUrl}
+            isProcessingVideo={isProcessingVideo}
+            handleProcessVideoUrl={handleProcessVideoUrl}
+            useLocalization={useLocalization}
+            setUseLocalization={setUseLocalization}
           />
         </div>
 
@@ -1112,33 +1524,84 @@ const processAudioChunk = async (audioData) => {
             <div className="column-title-section">
               <span className="column-title">{getRightLabel()}</span>
             </div>
-            <button
-              className={`speaker-button ${isPlayingTranslated ? 'playing' : ''}`}
-              onClick={() => playAudio(translatedText, outputLang, setIsPlayingTranslated)}
-              disabled={!translatedText}
-              title="Play translated text"
-            >
-              🔊
-            </button>
+            <div className="header-buttons">
+              <button
+                className="download-text-btn"
+                onClick={() => {
+                  if (inputSource === 'document' && translatedDocumentUrl) {
+                    // Download the actual document
+                    const downloadLink = document.createElement('a');
+                    downloadLink.href = translatedDocumentUrl.url;
+                    downloadLink.download = translatedDocumentUrl.filename;
+                    downloadLink.style.display = 'none';
+                    document.body.appendChild(downloadLink);
+                    downloadLink.click();
+                    document.body.removeChild(downloadLink);
+                  } else {
+                    // Download as text file
+                    downloadTranslatedText(translatedText, inputLang, outputLang);
+                  }
+                }}
+                disabled={!translatedText && !(inputSource === 'document' && translatedDocumentUrl)}
+                title={inputSource === 'document' ? 'Download translated document' : 'Download translated text'}
+              >
+                📥
+              </button>
+              <button
+                className={`speaker-button ${isPlayingTranslated ? 'playing' : ''}`}
+                onClick={() => playAudio(translatedText, outputLang, setIsPlayingTranslated)}
+                disabled={!translatedText}
+                title="Play translated text"
+              >
+                🔊
+              </button>
+            </div>
           </div>
           {inputSource === 'microphone' && micStatus === 'recording' && (
             <div className="live-chunk">
               <div><strong>Current Translation:</strong> {currentChunkTranslation}</div>
             </div>
           )}
+
+          {dubbedVideoUrl && (
+            <div className="video-preview" style={{ padding: 16, borderBottom: '1px solid #e2e8f0', background: '#fafbfc' }}>
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>Dubbed Video Preview</div>
+              <video controls src={dubbedVideoUrl} style={{ width: '100%', borderRadius: 8, background: '#000' }} />
+              <div style={{ marginTop: 10, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <a className="clear-btn" style={{ width: 'auto', textDecoration: 'none', display: 'inline-block', padding: '8px 12px' }} href={dubbedVideoUrl} download="dubbed.mp4">Download Dubbed Video</a>
+                <button className="clear-btn" style={{ width: 'auto', padding: '8px 12px' }} onClick={() => { try { URL.revokeObjectURL(dubbedVideoUrl); } catch (e) {} setDubbedVideoUrl(null); }}>Remove Preview</button>
+              </div>
+              {translatedText && (
+                <div className="video-transcript" style={{ marginTop: 12, padding: 12, background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+                  <div style={{ fontWeight: 600, marginBottom: 8, color: '#374151', fontSize: '0.9rem' }}>Translated Text:</div>
+                  <div className="transcript-text" style={{ maxHeight: '120px', overflowY: 'auto', fontSize: '0.95rem', lineHeight: '1.5', color: '#4b5563' }}>
+                    {translatedText}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="text-area output-area">
-            {isTranslating ? (
+            {isTranslating || isProcessingDocument ? (
               <div className="translating-indicator">
                 <div className="loading-dots">
                   <span>.</span><span>.</span><span>.</span>
                 </div>
-                Translating...
+                {isProcessingDocument ? 'Processing document...' : 'Translating...'}
               </div>
             ) : (
-              <div className={`output-text ${!translatedText ? 'placeholder' : ''}`}>
-                {translatedText || 'Translation will appear here...'}
-              </div>
+              inputSource === 'document' ? (
+                <div className="document-preview">
+                  <div className="document-content" dangerouslySetInnerHTML={{ __html: formatDocumentText(translatedText) }} />
+                </div>
+              ) : (
+                <div className={`output-text ${!translatedText ? 'placeholder' : ''}`}>
+                  {translatedText ? decodeHtmlEntities(translatedText) : 'Translation will appear here...'}
+                </div>
+              )
             )}
+
           </div>
         </div>
       </div>
@@ -1447,6 +1910,146 @@ const processAudioChunk = async (audioData) => {
           to { transform: scale(1.1); }
         }
 
+        .header-buttons {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .download-text-btn {
+          width: 44px;
+          height: 44px;
+          border-radius: 50%;
+          border: 2px solid #10b981;
+          background: white;
+          color: #10b981;
+          font-size: 1.2rem;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .download-text-btn:hover:not(:disabled) {
+          background: #10b981;
+          color: white;
+          transform: scale(1.05);
+        }
+
+        .download-text-btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+          border-color: #d1d5db;
+          color: #9ca3af;
+        }
+
+        .dark-theme .download-text-btn {
+          border-color: #10b981;
+          background: #23272a;
+          color: #10b981;
+        }
+
+        .dark-theme .download-text-btn:hover:not(:disabled) {
+          background: #10b981;
+          color: white;
+        }
+
+        .document-preview {
+          flex: 1;
+          min-height: 0;
+          padding: 24px;
+          background: white;
+          overflow-y: auto;
+        }
+
+        .document-content {
+          line-height: 1.8;
+          font-family: 'Poppins', sans-serif;
+          padding: 0;
+          white-space: pre-wrap;
+          word-wrap: break-word;
+        }
+        
+        .document-content h3:first-child {
+          margin-top: 0;
+        }
+        
+        .document-content p:last-child {
+          margin-bottom: 0;
+        }
+
+        .doc-subheading {
+          font-size: 1.2rem;
+          font-weight: 700;
+          color: #1e293b;
+          margin: 20px 0 12px 0;
+          line-height: 1.3;
+        }
+
+        .doc-paragraph {
+          margin: 12px 0;
+          color: #4b5563;
+          text-align: left;
+          line-height: 1.8;
+          font-size: 1.1rem;
+          white-space: pre-wrap;
+        }
+
+        .doc-bullet {
+          margin: 6px 0;
+          color: #4b5563;
+          padding-left: 20px;
+          line-height: 1.5;
+        }
+
+        .document-content strong {
+          font-weight: 700;
+          color: #1e293b;
+        }
+
+        .dark-theme .document-preview {
+          background: #23272a;
+        }
+
+        .dark-theme .doc-subheading {
+          color: #f3f4f6;
+        }
+
+        .dark-theme .document-content strong {
+          color: #f3f4f6;
+        }
+
+        .dark-theme .doc-paragraph,
+        .dark-theme .doc-bullet {
+          color: #d1d5db;
+        }
+
+        /* Custom scrollbar for document preview */
+        .document-preview::-webkit-scrollbar {
+          width: 6px;
+        }
+
+        .document-preview::-webkit-scrollbar-track {
+          background: #f1f5f9;
+          border-radius: 3px;
+        }
+
+        .document-preview::-webkit-scrollbar-thumb {
+          background: #cbd5e1;
+          border-radius: 3px;
+          transition: background 0.2s ease;
+        }
+
+        .document-preview::-webkit-scrollbar-thumb:hover {
+          background: #94a3b8;
+        }
+
+        .document-preview {
+          scrollbar-width: thin;
+          scrollbar-color: #cbd5e1 #f1f5f9;
+        }
+
         .text-area {
           flex: 1;
           min-height: 0;
@@ -1522,6 +2125,32 @@ const processAudioChunk = async (audioData) => {
 
         /* Firefox scrollbar */
         .output-area {
+          scrollbar-width: thin;
+          scrollbar-color: #cbd5e1 #f1f5f9;
+        }
+
+        /* Custom scrollbar for video transcript */
+        .transcript-text::-webkit-scrollbar {
+          width: 6px;
+        }
+
+        .transcript-text::-webkit-scrollbar-track {
+          background: #f1f5f9;
+          border-radius: 3px;
+        }
+
+        .transcript-text::-webkit-scrollbar-thumb {
+          background: #cbd5e1;
+          border-radius: 3px;
+          transition: background 0.2s ease;
+        }
+
+        .transcript-text::-webkit-scrollbar-thumb:hover {
+          background: #94a3b8;
+        }
+
+        /* Firefox scrollbar for transcript */
+        .transcript-text {
           scrollbar-width: thin;
           scrollbar-color: #cbd5e1 #f1f5f9;
         }
@@ -1612,7 +2241,7 @@ const processAudioChunk = async (audioData) => {
           accent-color: #3b82f6;
         }
 
-        .file-upload-section,         .microphone-section {
+        .file-upload-section, .document-upload-section, .microphone-section {
           margin-bottom: 20px;
           min-height: 120px;
         }
@@ -1667,6 +2296,57 @@ const processAudioChunk = async (audioData) => {
           border-radius: 6px;
           font-size: 0.9rem;
           font-weight: 500;
+        }
+
+        .supported-formats {
+          margin-top: 8px;
+          text-align: center;
+        }
+
+        .supported-formats small {
+          color: #6b7280;
+          font-size: 0.8rem;
+          font-style: italic;
+        }
+
+        .document-download-section {
+          margin-top: 16px;
+          padding: 12px;
+          background: #f0f9ff;
+          border-radius: 8px;
+          text-align: center;
+        }
+
+        .download-btn {
+          display: inline-block;
+          padding: 10px 20px;
+          background: #3b82f6;
+          color: white;
+          text-decoration: none;
+          border-radius: 8px;
+          font-weight: 600;
+          transition: all 0.2s ease;
+          border: none;
+          cursor: pointer;
+        }
+
+        .download-btn:hover {
+          background: #2563eb;
+          transform: translateY(-1px);
+          text-decoration: none;
+          color: white;
+        }
+
+        .dark-theme .document-download-section {
+          background: #1e293b;
+        }
+
+        .dark-theme .download-btn {
+          background: #60a5fa;
+        }
+
+        .dark-theme .download-btn:hover {
+          background: #3b82f6;
         }
 
         .mic-controls {
@@ -1891,6 +2571,55 @@ const processAudioChunk = async (audioData) => {
         .dark-theme .auto-play-info {
           background: #1f2937;
           color: #10b981;
+        }
+
+        .localization-section {
+          margin-bottom: 20px;
+        }
+
+        .localization-toggle {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          cursor: pointer;
+          font-weight: 500;
+          color: #374151;
+          margin-bottom: 8px;
+        }
+
+        .localization-toggle input[type="checkbox"] {
+          display: none;
+        }
+
+        .localization-info {
+          padding: 8px 12px;
+          background: #fef3c7;
+          color: #d97706;
+          border-radius: 6px;
+          font-size: 0.9rem;
+          font-weight: 500;
+          text-align: center;
+        }
+
+        .dark-theme .localization-toggle {
+          color: #f3f4f6;
+        }
+
+        .dark-theme .localization-info {
+          background: #1f2937;
+          color: #fbbf24;
+        }
+
+        .localization-toggle input[type="checkbox"]:checked + .toggle-slider {
+          background: #10b981 !important;
+        }
+
+        .localization-toggle input[type="checkbox"]:checked + .toggle-slider:before {
+          transform: translateX(26px) !important;
+        }
+
+        .dark-theme .localization-toggle input[type="checkbox"]:checked + .toggle-slider {
+          background: #10b981 !important;
         }
 
 
